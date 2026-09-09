@@ -9,8 +9,10 @@ import { signX402Payment } from "../../lib/client/x402-payment.js"
 import {
   createWalletForProvider,
   createWalletFromEnv,
+  isEvmAdapter,
   type WalletAdapter,
   type WalletProvider,
+  WrongChainTypeError,
 } from "../../lib/wallet/index.js"
 import { getChain } from "./get-chain.js"
 import { printProbeResult, probeEndpoint } from "./probe-endpoint.js"
@@ -117,6 +119,18 @@ export const smokeCommand = new Command("smoke")
       console.error(
         pc.red(
           "Error: Set PRIVATE_KEY (or other wallet env vars) or use --wallet-provider",
+        ),
+      )
+      process.exit(1)
+    }
+    // These flows sign EIP-712, so they need an EVM wallet. Must run before the viem getAddress()
+    // below, which throws on a base58 Solana key and would mask the real reason.
+    if (!isEvmAdapter(adapter)) {
+      // process.exit is `never`, so `adapter` is the EVM member below. The message comes from
+      // the shared error so all four EVM-only flows word it identically.
+      console.error(
+        pc.red(
+          `Error: ${new WrongChainTypeError(adapter, "evm", "this command").message}`,
         ),
       )
       process.exit(1)

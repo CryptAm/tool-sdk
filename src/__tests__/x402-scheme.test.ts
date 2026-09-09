@@ -1,4 +1,4 @@
-import type { WalletAdapter } from "@opensea/wallet-adapters"
+import type { SvmWalletAdapter, WalletAdapter } from "@opensea/wallet-adapters"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 import { describe, expect, it } from "vitest"
 import {
@@ -72,6 +72,7 @@ describe("ExactEip3009Scheme", () => {
   it("works with a WalletAdapter signer", async () => {
     const mockAdapter: WalletAdapter = {
       name: "mock",
+      chainType: "evm" as const,
       capabilities: {
         signMessage: true,
         signTypedData: true,
@@ -150,6 +151,7 @@ describe("signEip3009Authorization", () => {
   it("throws when WalletAdapter lacks signTypedData", async () => {
     const mockAdapter: WalletAdapter = {
       name: "no-typed-data",
+      chainType: "evm" as const,
       capabilities: {
         signMessage: false,
         signTypedData: false,
@@ -170,12 +172,39 @@ describe("signEip3009Authorization", () => {
     ).rejects.toThrow("does not support signTypedData")
   })
 
+  it("rejects a Solana adapter, which has no EIP-712 to sign with", async () => {
+    // x402 settles with EIP-3009 TransferWithAuthorization. An SVM adapter has no typed-data
+    // scheme at all, so the guard names that rather than failing later on a missing method.
+    const svm: SvmWalletAdapter = {
+      name: "svm-mock",
+      chainType: "svm",
+      capabilities: {
+        signMessage: true,
+        signTypedData: false,
+        managedGas: false,
+        managedNonce: false,
+      },
+      getAddress: async () => "So11111111111111111111111111111111111111112",
+      signTransaction: async () => ({ signedTransaction: "" }),
+    }
+
+    await expect(
+      signEip3009Authorization(svm, {
+        network: "base",
+        payTo: baseRequirements.payTo,
+        asset: baseRequirements.asset,
+        amount: "10000",
+      }),
+    ).rejects.toThrow(/signs for svm.*requires an EVM wallet/)
+  })
+
   it("pins the canonical USDC domain name and version even when extra overrides are present", async () => {
     let capturedDomain:
       | { name: string; version: string; chainId: number }
       | undefined
     const adapter: WalletAdapter = {
       name: "mock",
+      chainType: "evm" as const,
       capabilities: {
         signMessage: true,
         signTypedData: true,
@@ -218,6 +247,7 @@ describe("signEip3009Authorization", () => {
     let capturedDomain: { name: string; version: string } | undefined
     const adapter: WalletAdapter = {
       name: "mock",
+      chainType: "evm" as const,
       capabilities: {
         signMessage: true,
         signTypedData: true,

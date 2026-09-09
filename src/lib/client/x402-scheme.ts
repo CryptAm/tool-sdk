@@ -1,4 +1,5 @@
 import type { WalletAdapter } from "@opensea/wallet-adapters"
+import { requireEvmAdapter } from "@opensea/wallet-adapters"
 import type {
   PaymentPayloadContext,
   PaymentPayloadResult,
@@ -169,7 +170,9 @@ export async function signEip3009Authorization(
 
   let signature: string
   if (isAdapter) {
-    const adapter = signer as WalletAdapter
+    // x402 settles with EIP-3009 TransferWithAuthorization, which is EVM-only: a Solana adapter
+    // has no typed-data scheme to sign it with.
+    const adapter = requireEvmAdapter(signer as WalletAdapter, "x402 payment")
     if (!adapter.capabilities.signTypedData || !adapter.signTypedData) {
       throw new Error(
         `Wallet provider "${adapter.name}" does not support signTypedData`,

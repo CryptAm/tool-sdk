@@ -110,7 +110,7 @@ describe("register creatorAddress validation", () => {
         "https://test.example.com/.well-known/ai-tools/test-tool.json",
         "--dry-run",
       ]),
-    ).rejects.toThrow("No wallet provider configured")
+    ).rejects.toThrow("No EVM wallet provider configured")
 
     fetchSpy.mockRestore()
   })

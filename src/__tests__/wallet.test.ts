@@ -1,4 +1,7 @@
+import type { SvmWalletAdapter } from "@opensea/wallet-adapters"
+import { base } from "viem/chains"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { walletAdapterToClient } from "../lib/wallet/index.js"
 
 describe("createWalletFromEnv", () => {
   const originalEnv = { ...process.env }
@@ -26,7 +29,9 @@ describe("createWalletFromEnv", () => {
 
   it("should throw when no provider env vars are set", async () => {
     const { createWalletFromEnv } = await import("../lib/wallet/index.js")
-    expect(() => createWalletFromEnv()).toThrow("No wallet provider configured")
+    expect(() => createWalletFromEnv()).toThrow(
+      "No EVM wallet provider configured",
+    )
   })
 
   it("should create PrivyAdapter when Privy env vars are set", async () => {
@@ -167,5 +172,32 @@ describe("TurnkeyAdapter", () => {
     })
     const address = await adapter.getAddress()
     expect(address).toBe("0xAbCdEf1234567890abcdef1234567890AbCdEf12")
+  })
+})
+
+describe("walletAdapterToClient", () => {
+  const svm: SvmWalletAdapter = {
+    name: "svm-mock",
+    chainType: "svm",
+    capabilities: {
+      signMessage: true,
+      signTypedData: false,
+      managedGas: false,
+      managedNonce: false,
+    },
+    getAddress: async () => "So11111111111111111111111111111111111111112",
+    signTransaction: async () => ({ signedTransaction: "" }),
+  }
+
+  it("rejects a Solana adapter, since viem is an EVM client", async () => {
+    // Without the guard this surfaced as a missing-method error from inside the bridge, which
+    // told the caller nothing about why their wallet was wrong for the job.
+    await expect(walletAdapterToClient(svm, base)).rejects.toThrow(
+      /signs for svm.*requires an EVM wallet/,
+    )
+  })
+
+  it("names the provider in the rejection so the caller knows which wallet", async () => {
+    await expect(walletAdapterToClient(svm, base)).rejects.toThrow(/"svm-mock"/)
   })
 })

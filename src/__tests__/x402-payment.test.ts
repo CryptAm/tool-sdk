@@ -108,6 +108,7 @@ describe("signX402Payment", () => {
   it("works with a WalletAdapter signer", async () => {
     const mockAdapter: WalletAdapter = {
       name: "mock",
+      chainType: "evm" as const,
       capabilities: {
         signMessage: true,
         signTypedData: true,
@@ -177,6 +178,7 @@ describe("signX402Payment", () => {
   it("throws when WalletAdapter lacks signTypedData", async () => {
     const mockAdapter: WalletAdapter = {
       name: "no-typed-data",
+      chainType: "evm" as const,
       capabilities: {
         signMessage: false,
         signTypedData: false,

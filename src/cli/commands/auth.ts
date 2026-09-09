@@ -13,8 +13,10 @@ import {
 import {
   createWalletForProvider,
   createWalletFromEnv,
+  isEvmAdapter,
   type WalletAdapter,
   type WalletProvider,
+  WrongChainTypeError,
 } from "../../lib/wallet/index.js"
 import { readInput } from "./read-input.js"
 import { WALLET_PROVIDER_OPTION_DESCRIPTION } from "./shared.js"
@@ -87,6 +89,18 @@ export const authCommand = new Command("auth")
         console.error(
           pc.red(
             "Error: Set PRIVATE_KEY (or other wallet env vars), use --wallet-provider, or pass --bankr-key / BANKR_API_KEY",
+          ),
+        )
+        process.exit(1)
+      }
+      // These flows sign EIP-712, so they need an EVM wallet. Must run before the viem getAddress()
+      // below, which throws on a base58 Solana key and would mask the real reason.
+      if (!isEvmAdapter(adapter)) {
+        // process.exit is `never`, so `adapter` is the EVM member below. The message comes from
+        // the shared error so all four EVM-only flows word it identically.
+        console.error(
+          pc.red(
+            `Error: ${new WrongChainTypeError(adapter, "evm", "this command").message}`,
           ),
         )
         process.exit(1)

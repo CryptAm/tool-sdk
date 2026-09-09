@@ -181,6 +181,7 @@ describe("paidAuthenticatedFetch", () => {
 
     const mockAdapter: WalletAdapter = {
       name: "mock",
+      chainType: "evm" as const,
       capabilities: {
         signMessage: true,
         signTypedData: true,

@@ -189,11 +189,14 @@ export type {
 export { createX402UsageReporter } from "./lib/usage/x402-reporter.js"
 export { deriveSlug } from "./lib/utils.js"
 export type {
+  SvmTransactionRequest,
+  SvmWalletAdapter,
   TransactionRequest,
   TransactionResult,
   WalletAdapter,
   WalletCapabilities,
   WalletProvider,
+  WalletSelector,
 } from "./lib/wallet/index.js"
 export {
   BankrAdapter,
@@ -202,6 +205,7 @@ export {
   FireblocksAdapter,
   PrivateKeyAdapter,
   PrivyAdapter,
+  PrivySvmAdapter,
   TurnkeyAdapter,
   WALLET_PROVIDERS,
   walletAdapterToClient,
