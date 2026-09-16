@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { ToolContext } from "../types.js"
+import { createXPaymentHeaderBuilder } from "./helpers/x402.js"
 
 const TEST_CALLER = "0xabcdefabcdef1234567890abcdefabcdef123456" as const
 const TEST_TOOL_ID = 42n
@@ -69,27 +70,13 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function makeXPaymentHeader(overrides: Record<string, unknown> = {}): string {
-  const authorization = {
-    from: TEST_CALLER,
-    to: TEST_OPERATOR,
-    value: "1000000",
-    validAfter: "0",
-    validBefore: String(Math.floor(Date.now() / 1000) + 300),
-    nonce: "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-    ...overrides,
-  }
-  const payload = {
-    x402Version: 1,
-    scheme: "exact",
-    network: "base",
-    payload: {
-      signature: "0xabcd",
-      authorization,
-    },
-  }
-  return Buffer.from(JSON.stringify(payload)).toString("base64")
-}
+// The paid gate settles through the facilitator, so its default authorization
+// carries a non-zero value.
+const makeXPaymentHeader = createXPaymentHeaderBuilder({
+  from: TEST_CALLER,
+  to: TEST_OPERATOR,
+  value: "1000000",
+})
 
 function mockFacilitatorVerifySuccess() {
   mockFetch.mockResolvedValueOnce(

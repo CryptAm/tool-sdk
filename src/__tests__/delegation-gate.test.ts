@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { ToolContext } from "../types.js"
+import { createXPaymentHeaderBuilder } from "./helpers/x402.js"
 
 const TEST_TOOL_ID = 42n
 const AGENT_ADDRESS =
@@ -50,27 +51,12 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-function makeXPaymentHeader(overrides: Record<string, unknown> = {}): string {
-  const authorization = {
-    from: AGENT_ADDRESS,
-    to: TEST_OPERATOR,
-    value: "0",
-    validAfter: "0",
-    validBefore: String(Math.floor(Date.now() / 1000) + 300),
-    nonce: "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-    ...overrides,
-  }
-  const payload = {
-    x402Version: 1,
-    scheme: "exact",
-    network: "base",
-    payload: {
-      signature: "0xabcd",
-      authorization,
-    },
-  }
-  return Buffer.from(JSON.stringify(payload)).toString("base64")
-}
+// The agent signs the payment authorization here; the holder it acts for is
+// named by the X-Delegate-For header instead.
+const makeXPaymentHeader = createXPaymentHeaderBuilder({
+  from: AGENT_ADDRESS,
+  to: TEST_OPERATOR,
+})
 
 function makeRequest(headers?: Record<string, string>): Request {
   return new Request("https://example.com/api", {

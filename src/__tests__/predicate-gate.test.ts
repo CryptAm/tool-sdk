@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { ToolContext } from "../types.js"
+import { createXPaymentHeaderBuilder } from "./helpers/x402.js"
 
 const TEST_PREDICATE =
   "0xpredicatepredicatepredicatepredicatepredi" as `0x${string}`
@@ -70,30 +71,12 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-function makeXPaymentHeader(
-  overrides: Record<string, unknown> = {},
-  network = "base",
-): string {
-  const authorization = {
-    from: TEST_CALLER,
-    to: TEST_OPERATOR,
-    value: "0",
-    validAfter: "0",
-    validBefore: String(Math.floor(Date.now() / 1000) + 300),
-    nonce: "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-    ...overrides,
-  }
-  const payload = {
-    x402Version: 1,
-    scheme: "exact",
-    network,
-    payload: {
-      signature: "0xabcd",
-      authorization,
-    },
-  }
-  return Buffer.from(JSON.stringify(payload)).toString("base64")
-}
+// The identity gate requires a zero-value authorization, so that is the
+// default here. Individual tests pass a second argument for the network.
+const makeXPaymentHeader = createXPaymentHeaderBuilder({
+  from: TEST_CALLER,
+  to: TEST_OPERATOR,
+})
 
 function makeAuthorizedRequest(
   headerOverrides: Record<string, unknown> = {},

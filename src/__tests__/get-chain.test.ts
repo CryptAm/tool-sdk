@@ -23,9 +23,8 @@ describe("getChain", () => {
   it("defines robinhood with an RPC URL, explorer, and multicall3", () => {
     const chain = getChain("robinhood")
     expect(defaultRpcUrl(chain)).toBe("https://rpc.mainnet.chain.robinhood.com")
-    expect(chain.blockExplorers?.default.url).toBe(
-      "https://robinhoodchain.blockscout.com",
-    )
+    expect(chain.blockExplorers?.default.name).toBe("Etherscan")
+    expect(chain.blockExplorers?.default.url).toBe("https://robin.etherscan.io")
     expect(chain.contracts?.multicall3?.address).toBe(
       "0xcA11bde05977b3631167028862bE2a173976CA11",
     )

@@ -1,5 +1,11 @@
 # @opensea/tool-sdk
 
+## 0.30.1
+
+### Patch Changes
+
+- 2122139: Point the Robinhood Chain block explorer at robin.etherscan.io.
+
 ## 0.30.0
 
 ### Minor Changes
