@@ -63,7 +63,7 @@ const robinhood = defineChain({
     default: {
       name: "Etherscan",
       url: "https://robin.etherscan.io",
-      apiUrl: "https://robinhoodchain.blockscout.com/api",
+      apiUrl: "https://api.etherscan.io/v2/api?chainid=4663",
     },
   },
   contracts: {

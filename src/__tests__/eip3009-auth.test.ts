@@ -1,5 +1,6 @@
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { derivePredicateGateRecipient } from "../lib/predicate-gate-audience.js"
 import { signZeroValueAuthorization } from "../lib/usage/eip3009-auth.js"
 
 vi.mock("viem", async importOriginal => {
@@ -164,6 +165,21 @@ describe("signZeroValueAuthorization", () => {
 describe("eip3009AuthenticatedFetch", () => {
   const account = privateKeyToAccount(generatePrivateKey())
   const OPERATOR = "0x5ECA0441311643608a8c9Ab8B250f695Dd32E2a8" as const
+  const TOOL_URL = "https://tool.example.com/api"
+  const TOOL_ID = 42n
+  const BOUND_RECIPIENT = derivePredicateGateRecipient({
+    audience: TOOL_URL,
+    toolId: TOOL_ID,
+    operatorAddress: OPERATOR,
+  })
+  const PREDICATE_GATE_EXTRA = {
+    name: "USD Coin",
+    version: "2",
+    predicateGate: {
+      toolId: TOOL_ID.toString(),
+      operatorAddress: OPERATOR,
+    },
+  }
 
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -185,9 +201,9 @@ describe("eip3009AuthenticatedFetch", () => {
                 scheme: "exact",
                 network: "base",
                 maxAmountRequired: "0",
-                payTo: OPERATOR,
+                payTo: BOUND_RECIPIENT,
                 asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-                extra: { name: "USD Coin", version: "2" },
+                extra: PREDICATE_GATE_EXTRA,
               },
             ],
           }),
@@ -202,10 +218,11 @@ describe("eip3009AuthenticatedFetch", () => {
       "../lib/client/eip3009-auth.js"
     )
 
-    const res = await eip3009AuthenticatedFetch(
-      "https://tool.example.com/api",
-      { account, method: "POST", body: "{}" },
-    )
+    const res = await eip3009AuthenticatedFetch(TOOL_URL, {
+      account,
+      method: "POST",
+      body: "{}",
+    })
 
     expect(res.status).toBe(200)
     expect(fetchMock).toHaveBeenCalledTimes(2)
@@ -219,6 +236,94 @@ describe("eip3009AuthenticatedFetch", () => {
     const secondHeaders = new Headers(capturedInits[1].headers)
     expect(secondHeaders.get("Authorization")).toBeNull()
     expect(secondHeaders.get("X-Payment")).toBeTruthy()
+    expect(fetchMock.mock.calls[1][0]).toBe(TOOL_URL)
+  })
+
+  it("retries the final URL after a same-origin redirect", async () => {
+    const initialUrl = "https://tool.example.com/start"
+    const redirectedUrl = "https://tool.example.com/api"
+    let callCount = 0
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+      callCount++
+      if (callCount === 1) {
+        const response = new Response(
+          JSON.stringify({
+            x402Version: 1,
+            accepts: [
+              {
+                scheme: "exact",
+                network: "base",
+                maxAmountRequired: "0",
+                payTo: BOUND_RECIPIENT,
+                asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                extra: PREDICATE_GATE_EXTRA,
+              },
+            ],
+          }),
+          { status: 402 },
+        )
+        Object.defineProperty(response, "url", { value: redirectedUrl })
+        return response
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const { eip3009AuthenticatedFetch } = await import(
+      "../lib/client/eip3009-auth.js"
+    )
+    const response = await eip3009AuthenticatedFetch(initialUrl, {
+      account,
+      method: "POST",
+      body: "{}",
+    })
+
+    expect(response.status).toBe(200)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[1][0]).toBe(redirectedUrl)
+    expect(
+      new Headers(fetchMock.mock.calls[1][1]?.headers).get("X-Payment"),
+    ).toBeTruthy()
+  })
+
+  it("rejects a cross-origin redirect before signing", async () => {
+    const redirectedUrl = "https://attacker.example/api"
+    const fetchMock = vi.fn(async () => {
+      const response = new Response(
+        JSON.stringify({
+          x402Version: 1,
+          accepts: [
+            {
+              scheme: "exact",
+              network: "base",
+              maxAmountRequired: "0",
+              payTo: BOUND_RECIPIENT,
+              asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+              extra: PREDICATE_GATE_EXTRA,
+            },
+          ],
+        }),
+        { status: 402 },
+      )
+      Object.defineProperty(response, "url", { value: redirectedUrl })
+      return response
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const { eip3009AuthenticatedFetch } = await import(
+      "../lib/client/eip3009-auth.js"
+    )
+
+    await expect(
+      eip3009AuthenticatedFetch(TOOL_URL, {
+        account,
+        method: "POST",
+        body: "{}",
+      }),
+    ).rejects.toThrow(
+      /refusing to sign after cross-origin redirect.*tool\.example\.com.*attacker\.example/,
+    )
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it("signed X-Payment always authorizes value 0", async () => {
@@ -236,9 +341,9 @@ describe("eip3009AuthenticatedFetch", () => {
                 scheme: "exact",
                 network: "base",
                 maxAmountRequired: "0",
-                payTo: OPERATOR,
+                payTo: BOUND_RECIPIENT,
                 asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-                extra: { name: "USD Coin", version: "2" },
+                extra: PREDICATE_GATE_EXTRA,
               },
             ],
           }),
@@ -253,7 +358,7 @@ describe("eip3009AuthenticatedFetch", () => {
       "../lib/client/eip3009-auth.js"
     )
 
-    await eip3009AuthenticatedFetch("https://tool.example.com/api", {
+    await eip3009AuthenticatedFetch(TOOL_URL, {
       account,
       method: "POST",
       body: "{}",
@@ -409,7 +514,43 @@ describe("eip3009AuthenticatedFetch", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it("throws without signing when the zero-value challenge asset is not canonical USDC", async () => {
+  it("rejects a predicate authorization relayed from another endpoint", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            x402Version: 1,
+            accepts: [
+              {
+                scheme: "exact",
+                network: "base",
+                maxAmountRequired: "0",
+                payTo: BOUND_RECIPIENT,
+                asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                extra: PREDICATE_GATE_EXTRA,
+              },
+            ],
+          }),
+          { status: 402 },
+        ),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    const { eip3009AuthenticatedFetch } = await import(
+      "../lib/client/eip3009-auth.js"
+    )
+
+    await expect(
+      eip3009AuthenticatedFetch("https://phishing.example/api", {
+        account,
+        method: "POST",
+        body: "{}",
+      }),
+    ).rejects.toThrow(/is not bound to https:\/\/phishing\.example\/api/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("rejects a zero-value challenge without predicate audience metadata", async () => {
     const fetchMock = vi.fn(
       async () =>
         new Response(
@@ -421,8 +562,48 @@ describe("eip3009AuthenticatedFetch", () => {
                 network: "base",
                 maxAmountRequired: "0",
                 payTo: OPERATOR,
+                asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                extra: { name: "USD Coin", version: "2" },
+              },
+            ],
+          }),
+          { status: 402 },
+        ),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    const { eip3009AuthenticatedFetch } = await import(
+      "../lib/client/eip3009-auth.js"
+    )
+
+    await expect(
+      eip3009AuthenticatedFetch(TOOL_URL, {
+        account,
+        method: "POST",
+        body: "{}",
+      }),
+    ).rejects.toThrow(/missing a valid audience binding/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("throws without signing when the zero-value challenge asset is not canonical USDC", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            x402Version: 1,
+            accepts: [
+              {
+                scheme: "exact",
+                network: "base",
+                maxAmountRequired: "0",
+                payTo: BOUND_RECIPIENT,
                 asset: "0x1111111111111111111111111111111111111111",
-                extra: { name: "Evil Contract", version: "1" },
+                extra: {
+                  ...PREDICATE_GATE_EXTRA,
+                  name: "Evil Contract",
+                  version: "1",
+                },
               },
             ],
           }),
@@ -456,9 +637,9 @@ describe("eip3009AuthenticatedFetch", () => {
                 scheme: "exact",
                 network: "eip155:1",
                 maxAmountRequired: "0",
-                payTo: OPERATOR,
+                payTo: BOUND_RECIPIENT,
                 asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-                extra: { name: "USD Coin", version: "2" },
+                extra: PREDICATE_GATE_EXTRA,
               },
             ],
           }),

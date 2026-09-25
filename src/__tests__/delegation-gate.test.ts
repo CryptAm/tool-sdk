@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { derivePredicateGateRecipient } from "../lib/predicate-gate-audience.js"
 import type { ToolContext } from "../types.js"
 import { createXPaymentHeaderBuilder } from "./helpers/x402.js"
 
@@ -11,6 +12,11 @@ const TEST_PREDICATE =
   "0xpredicatepredicatepredicatepredicatepredi" as `0x${string}`
 const TEST_OPERATOR =
   "0x5ECA0441311643608a8c9Ab8B250f695Dd32E2a8" as `0x${string}`
+const TEST_GATE_RECIPIENT = derivePredicateGateRecipient({
+  audience: "https://example.com/api",
+  toolId: TEST_TOOL_ID,
+  operatorAddress: TEST_OPERATOR,
+})
 
 const mockTryHasAccess = vi.fn(async () => ({ ok: true, granted: true }))
 const mockGetToolConfig = vi.fn(async () => ({
@@ -55,7 +61,7 @@ afterEach(() => {
 // named by the X-Delegate-For header instead.
 const makeXPaymentHeader = createXPaymentHeaderBuilder({
   from: AGENT_ADDRESS,
-  to: TEST_OPERATOR,
+  to: TEST_GATE_RECIPIENT,
 })
 
 function makeRequest(headers?: Record<string, string>): Request {

@@ -1,4 +1,5 @@
 import type { Account } from "viem"
+import { derivePredicateGateRecipient } from "../predicate-gate-audience.js"
 import type {
   SignZeroValueAuthorizationParams,
   ZeroValueAuthorization,
@@ -37,7 +38,10 @@ export function createEip3009AuthHeader(
 /**
  * Fetch wrapper for predicate-gated tools. Sends the request; on 402,
  * signs an `X-Payment` header (zero-value EIP-3009 `TransferWithAuthorization`)
- * using the advertised `payTo` and retries once.
+ * using the advertised `payTo` and retries once. Before signing a zero-value
+ * challenge, it verifies that `payTo` binds the final endpoint URL to the
+ * advertised tool ID and operator. Same-origin redirects are allowed;
+ * cross-origin redirects fail before signing.
  *
  * This is an identity-only flow: the signed authorization always has
  * `value: 0`, so no USDC can move. If the challenge requests a non-zero
@@ -88,6 +92,25 @@ export async function eip3009AuthenticatedFetch(
         // authorization that could move USDC.
         return res
       }
+      const binding = parsePredicateGateBinding(requirements.extra)
+      if (!binding) {
+        throw new Error(
+          "eip3009: predicate gate challenge is missing a valid audience binding",
+        )
+      }
+      const challengeAudience = resolveChallengeAudience(url, res)
+      const expectedRecipient = derivePredicateGateRecipient({
+        audience: challengeAudience,
+        toolId: binding.toolId,
+        operatorAddress: binding.operatorAddress,
+      })
+      if (
+        requirements.payTo.toLowerCase() !== expectedRecipient.toLowerCase()
+      ) {
+        throw new Error(
+          `eip3009: payTo address ${requirements.payTo} is not bound to ${challengeAudience}`,
+        )
+      }
       if (!resolveNetwork(requirements.network)) {
         throw new Error(
           `x402: network ${requirements.network} is not supported — refusing to sign`,
@@ -104,7 +127,7 @@ export async function eip3009AuthenticatedFetch(
         signer: account,
         paymentRequirements: { ...requirements, maxAmountRequired: "0" },
       })
-      return fetch(url, {
+      return fetch(challengeAudience, {
         ...fetchOptions,
         headers: {
           ...baseHeaders,
@@ -115,6 +138,48 @@ export async function eip3009AuthenticatedFetch(
   }
 
   return res
+}
+
+const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/
+
+function parsePredicateGateBinding(extra: PaymentRequirements["extra"]): {
+  toolId: bigint
+  operatorAddress: `0x${string}`
+} | null {
+  const raw = extra?.predicateGate
+  if (!raw || typeof raw !== "object") return null
+  const binding = raw as Record<string, unknown>
+  if (
+    typeof binding.toolId !== "string" ||
+    typeof binding.operatorAddress !== "string" ||
+    !EVM_ADDRESS.test(binding.operatorAddress)
+  ) {
+    return null
+  }
+  try {
+    const toolId = BigInt(binding.toolId)
+    if (toolId < 0n) return null
+    return {
+      toolId,
+      operatorAddress: binding.operatorAddress as `0x${string}`,
+    }
+  } catch {
+    return null
+  }
+}
+
+function resolveChallengeAudience(url: string, res: Response): string {
+  const requested =
+    typeof globalThis.location === "object"
+      ? new URL(url, globalThis.location.href)
+      : new URL(url)
+  const response = res.url ? new URL(res.url) : requested
+  if (response.origin !== requested.origin) {
+    throw new Error(
+      `eip3009: refusing to sign after cross-origin redirect from ${requested.origin} to ${response.origin}`,
+    )
+  }
+  return response.href
 }
 
 /**

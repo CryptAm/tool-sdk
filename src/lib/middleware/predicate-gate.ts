@@ -20,6 +20,7 @@ import {
 import { IDelegateRegistryABI } from "../onchain/abis.js"
 import { DELEGATE_REGISTRY } from "../onchain/chains.js"
 import { ToolRegistryClient } from "../onchain/registry.js"
+import { derivePredicateGateRecipient } from "../predicate-gate-audience.js"
 import type { ZeroValueAuthorization } from "../usage/eip3009-auth.js"
 
 const NETWORK_USDC: Record<number, `0x${string}`> = {
@@ -70,10 +71,23 @@ export interface PredicateGateConfig {
    */
   delegateRegistryAddress?: `0x${string}`
   /**
-   * Tool operator address. The 402 challenge advertises this as the `payTo`
-   * field, and X-Payment authorizations must have their `to` field match.
+   * Tool operator address. The gate combines this with the endpoint URL and
+   * tool ID to derive the `payTo` recipient for the zero-value authorization.
+   * The client verifies the same binding before signing.
    */
   operatorAddress: `0x${string}`
+  /**
+   * Absolute public URL of this endpoint. Defaults to the incoming request URL.
+   * Set this when a reverse proxy rewrites the URL before the request reaches
+   * the tool server. Clients always verify this audience before signing.
+   */
+  audience?: string
+  /**
+   * Enforce that each identity authorization is used at most once. See
+   * {@link X402ReplayGuard}. The guard must use atomic shared storage so
+   * concurrent requests cannot reuse one authorization to run the handler.
+   */
+  replayGuard?: X402ReplayGuard
 }
 
 /**
@@ -151,17 +165,26 @@ export function predicateGate(config: PredicateGateConfig): GateMiddleware {
       request: Request,
       ctx: Partial<ToolContext>,
     ): Promise<Response | null> {
+      const identityRecipient = config.operatorAddress
+        ? derivePredicateGateRecipient({
+            audience: config.audience ?? request.url,
+            toolId: config.toolId,
+            operatorAddress: config.operatorAddress,
+          })
+        : config.operatorAddress
       const paymentHeader = request.headers.get("X-Payment")
 
       if (!paymentHeader) {
         return buildPredicateChallengeResponse(
-          config.operatorAddress,
+          identityRecipient,
           identityChainId,
+          config.toolId,
+          config.operatorAddress,
         )
       }
 
       const result = await verifyXPaymentAuth(paymentHeader, {
-        operatorAddress: config.operatorAddress,
+        expectedRecipient: identityRecipient,
         expectedChainId: identityChainId,
         requireZeroValue: true,
       })
@@ -279,6 +302,44 @@ export function predicateGate(config: PredicateGateConfig): GateMiddleware {
         )
       }
 
+      if (config.replayGuard) {
+        const replayKey = callerAuthorization
+          ? authorizationReplayKey(
+              { payload: { authorization: callerAuthorization } },
+              CHAIN_ID_TO_NETWORK[identityChainId] ?? "base",
+              NETWORK_USDC[identityChainId] ?? USDC_BASE_ADDRESS,
+            )
+          : undefined
+        if (!replayKey) {
+          return Response.json(
+            {
+              error:
+                "Predicate gate: X-Payment authorization cannot be replay-protected",
+            },
+            { status: 401 },
+          )
+        }
+        let reserved: boolean
+        try {
+          reserved = await withReplayGuardTimeout(
+            config.replayGuard.reserve(replayKey),
+            "reserve",
+          )
+        } catch (err) {
+          console.error("[tool-sdk] replayGuard.reserve failed:", err)
+          reserved = false
+        }
+        if (!reserved) {
+          return buildPredicateChallengeResponse(
+            identityRecipient,
+            identityChainId,
+            config.toolId,
+            config.operatorAddress,
+            "Predicate gate: X-Payment authorization already used",
+          )
+        }
+      }
+
       ctx.callerAddress = predicateSubject
       if (agentAddress) {
         ctx.agentAddress = agentAddress
@@ -323,7 +384,7 @@ interface VerifyXPaymentOptions {
    * Required — verification fails closed (500) when unset so an authorization
    * signed for an arbitrary recipient can never authenticate.
    */
-  operatorAddress: `0x${string}`
+  expectedRecipient: `0x${string}`
   /**
    * ChainId of the x402 payment network the identity proof must be signed for
    * (Base / Base-Sepolia), independent of the registry chain. The resolved
@@ -352,7 +413,7 @@ async function verifyXPaymentAuth(
   // Fail closed: an authorization signed for an arbitrary recipient must never
   // authenticate. Both gate configs type operatorAddress as required, so a
   // missing value here is a server misconfiguration (500), not a client error.
-  if (!options.operatorAddress) {
+  if (!options.expectedRecipient) {
     return {
       error:
         "Predicate gate: operator address is not configured (cannot verify X-Payment recipient)",
@@ -412,9 +473,9 @@ async function verifyXPaymentAuth(
     }
   }
 
-  if (auth.to.toLowerCase() !== options.operatorAddress.toLowerCase()) {
+  if (auth.to.toLowerCase() !== options.expectedRecipient.toLowerCase()) {
     return {
-      error: `Predicate gate: X-Payment 'to' address mismatch (expected ${options.operatorAddress})`,
+      error: `Predicate gate: X-Payment 'to' address mismatch (expected ${options.expectedRecipient})`,
       status: 401,
     }
   }
@@ -565,23 +626,33 @@ function x402IdentityChainId(registryChainId: number): number {
 }
 
 function buildPredicateChallengeResponse(
-  operatorAddress: `0x${string}`,
+  recipientAddress: `0x${string}`,
   chainId: number,
+  toolId: bigint,
+  configuredOperatorAddress: `0x${string}`,
+  error = "Predicate gate: X-PAYMENT header is required",
 ): Response {
   const network = CHAIN_ID_TO_NETWORK[chainId] ?? "base"
   const asset = NETWORK_USDC[chainId] ?? USDC_BASE_ADDRESS
   return Response.json(
     {
       x402Version: 1,
-      error: "Predicate gate: X-PAYMENT header is required",
+      error,
       accepts: [
         {
           scheme: "exact",
           network,
           maxAmountRequired: "0",
-          payTo: operatorAddress,
+          payTo: recipientAddress,
           asset,
-          extra: { name: "USD Coin", version: "2" },
+          extra: {
+            name: "USD Coin",
+            version: "2",
+            predicateGate: {
+              toolId: toolId.toString(),
+              operatorAddress: configuredOperatorAddress,
+            },
+          },
         },
       ],
     },
@@ -834,7 +905,7 @@ export function paidPredicateGate(
 
       // --- Identity verification (X-Payment signature) ---
       const authResult = await verifyXPaymentAuth(paymentHeader, {
-        operatorAddress: config.operatorAddress,
+        expectedRecipient: config.operatorAddress,
         expectedChainId: identityChainId,
         requireZeroValue: false,
       })

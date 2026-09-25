@@ -1,5 +1,15 @@
 # @opensea/tool-sdk
 
+## 0.31.0
+
+### Minor Changes
+
+- 7bf40b0: Bind free `predicateGate` EIP-3009 authorizations to the endpoint URL, tool ID, and operator, and make `eip3009AuthenticatedFetch` verify that audience before signing. Add an optional shared `replayGuard` to enforce single-use identity authorizations.
+
+### Patch Changes
+
+- e74dfa7: Point the Robinhood Chain explorer `apiUrl` at the Etherscan v2 API (`chainid=4663`) instead of Blockscout. Etherscan v2 now lists Robinhood Chain, and the Blockscout API returns a Cloudflare 403 to scripted clients.
+
 ## 0.30.1
 
 ### Patch Changes

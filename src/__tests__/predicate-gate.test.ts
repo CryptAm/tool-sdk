@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { derivePredicateGateRecipient } from "../lib/predicate-gate-audience.js"
 import type { ToolContext } from "../types.js"
 import { createXPaymentHeaderBuilder } from "./helpers/x402.js"
 
@@ -8,6 +9,9 @@ const TEST_CALLER = "0xabcdefabcdef1234567890abcdefabcdef123456" as const
 const TEST_TOOL_ID = 42n
 const TEST_OPERATOR =
   "0x5ECA0441311643608a8c9Ab8B250f695Dd32E2a8" as `0x${string}`
+const TEST_AUDIENCE = "https://example.com/api"
+const TEST_GATE_RECIPIENT =
+  "0x1a1D056f89d42c3B0fA2F69D3FBd5cF1b2ed0e15" as `0x${string}`
 
 const mockTryHasAccess = vi.fn(async () => ({ ok: true, granted: true }))
 const mockGetToolConfig = vi.fn(async () => ({
@@ -75,7 +79,7 @@ afterEach(() => {
 // default here. Individual tests pass a second argument for the network.
 const makeXPaymentHeader = createXPaymentHeaderBuilder({
   from: TEST_CALLER,
-  to: TEST_OPERATOR,
+  to: TEST_GATE_RECIPIENT,
 })
 
 function makeAuthorizedRequest(
@@ -108,10 +112,117 @@ describe("predicateGate", () => {
     const body = await response?.json()
     expect(body.x402Version).toBe(1)
     expect(body.accepts).toHaveLength(1)
-    expect(body.accepts[0].payTo).toBe(TEST_OPERATOR)
+    expect(body.accepts[0].payTo).toBe(TEST_GATE_RECIPIENT)
     expect(body.accepts[0].maxAmountRequired).toBe("0")
     expect(body.accepts[0].scheme).toBe("exact")
     expect(body.accepts[0].network).toBe("base")
+    expect(body.accepts[0].extra.predicateGate).toEqual({
+      toolId: TEST_TOOL_ID.toString(),
+      operatorAddress: TEST_OPERATOR,
+    })
+  })
+
+  it("binds the identity authorization recipient to the tool ID", async () => {
+    const { predicateGate } = await import(
+      "../lib/middleware/predicate-gate.js"
+    )
+    const firstGate = predicateGate({
+      toolId: TEST_TOOL_ID,
+      operatorAddress: TEST_OPERATOR,
+    })
+    const secondGate = predicateGate({
+      toolId: TEST_TOOL_ID + 1n,
+      operatorAddress: TEST_OPERATOR,
+    })
+    const request = new Request("https://example.com/api", { method: "POST" })
+
+    const firstResponse = await firstGate.check(request, { gates: {} })
+    const secondResponse = await secondGate.check(request, { gates: {} })
+    const firstBody = await firstResponse?.json()
+    const secondBody = await secondResponse?.json()
+
+    expect(firstBody.accepts[0].payTo).not.toBe(secondBody.accepts[0].payTo)
+  })
+
+  it("uses the configured public audience behind a URL-rewriting proxy", async () => {
+    const publicAudience = "https://public.example/tools/secure"
+    const { predicateGate } = await import(
+      "../lib/middleware/predicate-gate.js"
+    )
+    const gate = predicateGate({
+      toolId: TEST_TOOL_ID,
+      operatorAddress: TEST_OPERATOR,
+      audience: publicAudience,
+    })
+
+    const response = await gate.check(
+      new Request("http://internal-service:3000/api", { method: "POST" }),
+      { gates: {} },
+    )
+    const body = await response?.json()
+
+    expect(body.accepts[0].payTo).toBe(
+      "0xB82ed0c05C116396864d7Eee45814C868592f8Cc",
+    )
+  })
+
+  it("rejects an identity authorization issued for a different tool", async () => {
+    const { predicateGate } = await import(
+      "../lib/middleware/predicate-gate.js"
+    )
+    const targetGate = predicateGate({
+      toolId: TEST_TOOL_ID,
+      operatorAddress: TEST_OPERATOR,
+    })
+    const otherGate = predicateGate({
+      toolId: TEST_TOOL_ID + 1n,
+      operatorAddress: TEST_OPERATOR,
+    })
+    const challenge = await otherGate.check(
+      new Request("https://example.com/api", { method: "POST" }),
+      { gates: {} },
+    )
+    const challengeBody = await challenge?.json()
+    const request = new Request("https://example.com/api", {
+      method: "POST",
+      headers: {
+        "X-Payment": makeXPaymentHeader({
+          to: challengeBody.accepts[0].payTo,
+        }),
+      },
+    })
+
+    const response = await targetGate.check(request, { gates: {} })
+
+    expect(response?.status).toBe(401)
+    expect(mockTryHasAccess).not.toHaveBeenCalled()
+  })
+
+  it("rejects an identity authorization issued for a different endpoint", async () => {
+    const { predicateGate } = await import(
+      "../lib/middleware/predicate-gate.js"
+    )
+    const gate = predicateGate({
+      toolId: TEST_TOOL_ID,
+      operatorAddress: TEST_OPERATOR,
+    })
+    const request = new Request(TEST_AUDIENCE, {
+      method: "POST",
+      headers: {
+        "X-Payment": makeXPaymentHeader({
+          to: derivePredicateGateRecipient({
+            audience: "https://phishing.example/api",
+            toolId: TEST_TOOL_ID,
+            operatorAddress: TEST_OPERATOR,
+          }),
+        }),
+      },
+    })
+
+    const response = await gate.check(request, { gates: {} })
+
+    expect(response?.status).toBe(401)
+    expect(mockTryHasAccess).not.toHaveBeenCalled()
   })
 
   it("returns 402 with base-sepolia network when chain is baseSepolia", async () => {
@@ -164,6 +275,97 @@ describe("predicateGate", () => {
       TEST_CALLER,
       "0x",
     )
+  })
+
+  it("rejects a replayed identity authorization when replayGuard is configured", async () => {
+    const claimed = new Set<string>()
+    const reserve = vi.fn(async (key: string) => {
+      if (claimed.has(key)) return false
+      claimed.add(key)
+      return true
+    })
+    const { predicateGate } = await import(
+      "../lib/middleware/predicate-gate.js"
+    )
+    const gate = predicateGate({
+      toolId: TEST_TOOL_ID,
+      operatorAddress: TEST_OPERATOR,
+      replayGuard: { reserve },
+    })
+
+    const firstContext: Partial<ToolContext> = { gates: {} }
+    const secondContext: Partial<ToolContext> = { gates: {} }
+    const firstResponse = await gate.check(
+      makeAuthorizedRequest(),
+      firstContext,
+    )
+    const secondResponse = await gate.check(
+      makeAuthorizedRequest(),
+      secondContext,
+    )
+
+    expect(firstResponse).toBeNull()
+    expect(firstContext.callerAddress).toBe(TEST_CALLER)
+    expect(secondResponse?.status).toBe(402)
+    expect(await secondResponse?.json()).toMatchObject({
+      error: expect.stringMatching(/already used/i),
+    })
+    expect(secondContext.callerAddress).toBeUndefined()
+    expect(reserve).toHaveBeenCalledTimes(2)
+    expect(reserve).toHaveBeenCalledWith(
+      "x402:base:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913:0xabcdefabcdef1234567890abcdefabcdef123456:0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+    )
+  })
+
+  it("fails closed when replayGuard cannot derive an authorization key", async () => {
+    const reserve = vi.fn(async () => true)
+    const { predicateGate } = await import(
+      "../lib/middleware/predicate-gate.js"
+    )
+    const gate = predicateGate({
+      toolId: TEST_TOOL_ID,
+      operatorAddress: TEST_OPERATOR,
+      replayGuard: { reserve },
+    })
+
+    const response = await gate.check(
+      makeAuthorizedRequest({ nonce: "0x01" }),
+      { gates: {} },
+    )
+
+    expect(response?.status).toBe(401)
+    expect(await response?.json()).toMatchObject({
+      error: expect.stringMatching(/cannot be replay-protected/i),
+    })
+    expect(reserve).not.toHaveBeenCalled()
+  })
+
+  it("fails closed when replayGuard storage throws", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {})
+    const { predicateGate } = await import(
+      "../lib/middleware/predicate-gate.js"
+    )
+    const gate = predicateGate({
+      toolId: TEST_TOOL_ID,
+      operatorAddress: TEST_OPERATOR,
+      replayGuard: {
+        reserve: async () => {
+          throw new Error("store unavailable")
+        },
+      },
+    })
+
+    const response = await gate.check(makeAuthorizedRequest(), { gates: {} })
+
+    expect(response?.status).toBe(402)
+    expect(await response?.json()).toMatchObject({
+      error: expect.stringMatching(/already used/i),
+    })
+    expect(log).toHaveBeenCalledWith(
+      "[tool-sdk] replayGuard.reserve failed:",
+      expect.any(Error),
+    )
+    log.mockRestore()
   })
 
   it("accepts a CAIP-2 network (eip155:8453) in the X-Payment payload", async () => {
@@ -724,7 +926,16 @@ describe("predicateGate", () => {
     })
     const ctx: Partial<ToolContext> = { gates: {} }
 
-    const response = await gate.check(makeAuthorizedRequest(), ctx)
+    const response = await gate.check(
+      makeAuthorizedRequest({
+        to: derivePredicateGateRecipient({
+          audience: TEST_AUDIENCE,
+          toolId: TEST_TOOL_ID,
+          operatorAddress: TEST_OPERATOR,
+        }),
+      }),
+      ctx,
+    )
 
     expect(response).toBeNull()
     expect(ctx.callerAddress).toBe(TEST_CALLER)

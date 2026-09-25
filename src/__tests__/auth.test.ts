@@ -1,9 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { derivePredicateGateRecipient } from "../lib/predicate-gate-audience.js"
 
 // Hardhat/Anvil account #0 — deterministic test key, never holds real funds
 const PRIVATE_KEY =
   "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 const BANKR_ADDRESS = "0x8b8e1C20E0630De8C60f0e0D5C3e9C7c20F0c20e"
+const TOOL_URL = "https://tool.example.com/api"
+const TOOL_ID = 42n
+const OPERATOR = "0x5ECA0441311643608a8c9Ab8B250f695Dd32E2a8" as const
+const BOUND_RECIPIENT = derivePredicateGateRecipient({
+  audience: TOOL_URL,
+  toolId: TOOL_ID,
+  operatorAddress: OPERATOR,
+})
+const PREDICATE_GATE_EXTRA = {
+  name: "USD Coin",
+  version: "2",
+  predicateGate: {
+    toolId: TOOL_ID.toString(),
+    operatorAddress: OPERATOR,
+  },
+}
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -35,9 +52,9 @@ describe("auth command", () => {
                 scheme: "exact",
                 network: "base",
                 maxAmountRequired: "0",
-                payTo: "0x5ECA0441311643608a8c9Ab8B250f695Dd32E2a8",
+                payTo: BOUND_RECIPIENT,
                 asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-                extra: { name: "USD Coin", version: "2" },
+                extra: PREDICATE_GATE_EXTRA,
               },
             ],
           }),
@@ -59,7 +76,7 @@ describe("auth command", () => {
     await authCommand.parseAsync([
       "node",
       "auth",
-      "https://tool.example.com/api",
+      TOOL_URL,
       "--body",
       '{"query":"test"}',
     ])
@@ -81,9 +98,7 @@ describe("auth command", () => {
     const payload = JSON.parse(json)
     expect(payload.x402Version).toBe(1)
     expect(payload.scheme).toBe("exact")
-    expect(payload.payload.authorization.to).toBe(
-      "0x5ECA0441311643608a8c9Ab8B250f695Dd32E2a8",
-    )
+    expect(payload.payload.authorization.to).toBe(BOUND_RECIPIENT)
 
     logSpy.mockRestore()
   })
@@ -108,9 +123,9 @@ describe("auth command", () => {
                 scheme: "exact",
                 network: "base",
                 maxAmountRequired: "0",
-                payTo: "0x5ECA0441311643608a8c9Ab8B250f695Dd32E2a8",
+                payTo: BOUND_RECIPIENT,
                 asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-                extra: { name: "USD Coin", version: "2" },
+                extra: PREDICATE_GATE_EXTRA,
               },
             ],
           }),
@@ -132,7 +147,7 @@ describe("auth command", () => {
     await authCommand.parseAsync([
       "node",
       "auth",
-      "https://tool.example.com/api",
+      TOOL_URL,
       "--wallet-provider",
       "private-key",
       "--body",

@@ -16,6 +16,7 @@ pnpm run type-check
 
 - Library: manifest validation, onchain registry client, gating middleware, x402 payment gates and facilitators, usage reporting, framework adapters, wallet re-exports.
 - CLI: register, gate, inspect, pay, and smoke-test tools.
+- Test helpers at the `@opensea/tool-sdk/testing` subpath (`src/testing/`); project scaffolds in `src/templates/` (cloudflare, express, vercel).
 - Skill docs (`skill/`) mirror the agent-facing playbook at `packages/skill/opensea-tool-sdk/`.
 
 ## Rules

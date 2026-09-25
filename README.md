@@ -561,7 +561,10 @@ For a visual walkthrough of the full 402 challenge-response lifecycle (identity 
 Delegates the access decision to the onchain `ToolRegistry`. When
 `operatorAddress` is configured, the gate returns a 402 challenge with
 `PaymentRequirements` (`maxAmountRequired: "0"`); the caller signs a
-zero-value `X-Payment` and retries — the same flow as x402. The middleware
+zero-value `X-Payment` and retries. The challenge derives its `payTo` address
+from the endpoint URL, tool ID, and operator. The client checks that binding
+before signing, so an authorization captured by another endpoint cannot be
+replayed here. The middleware
 recovers the caller's address from the `X-Payment` signature via `ecrecover`
 and staticcalls `IToolRegistry.tryHasAccess(toolId, caller, data)`. Whatever
 predicate the tool's creator registered (single-collection ERC-721,
@@ -573,7 +576,9 @@ import { predicateGate } from "@opensea/tool-sdk"
 
 const gate = predicateGate({
   toolId: 42n,                          // from the ToolRegistered event
+  operatorAddress: "0xYOUR_OPERATOR",   // included in the audience binding
   rpcUrl: "https://mainnet.base.org",   // optional
+  // audience: "https://tool.example/api", // only if a proxy rewrites request.url
 })
 
 const handler = createToolHandler({
@@ -610,9 +615,9 @@ Preferred auth mechanism: `X-Payment` header (zero-value EIP-3009 `TransferWithA
 > **Note:** The gate bounds the `validBefore` window server-side: the
 > authorization must not be expired and must be at most 1 hour in the future
 > (SDK clients sign a much shorter window — 5 min zero-value / 10 min paid).
-> Each authorization includes a random nonce bound into the signature, but the
-> gate does **not** deduplicate nonces server-side, so an `X-Payment` header is
-> replayable within its validity window. See [Replay protection](#replay-protection) if you need single-use semantics.
+> Each authorization includes a random nonce bound into the signature. Configure
+> `replayGuard` with an atomic shared store when one authorization must run the
+> handler at most once. See [Replay protection](#replay-protection).
 
 #### Delegated agent access (delegate.xyz)
 
@@ -881,7 +886,7 @@ const data = await res.json()
 
 ### Predicate-Gated Tools
 
-Gate your tool using the onchain access predicate system. When `operatorAddress` is configured, `predicateGate` uses a unified 402 challenge flow: it returns `PaymentRequirements` with `maxAmountRequired: "0"`, the caller signs a zero-value `X-Payment`, and the middleware recovers the caller's address via `ecrecover`. Access is then delegated to `IToolRegistry.tryHasAccess` — it works with ERC721OwnerPredicate, ERC1155OwnerPredicate, SubscriptionPredicate, ERC20BalancePredicate, CompositePredicate, or any future predicate automatically.
+Gate your tool using the onchain access predicate system. `predicateGate` returns `PaymentRequirements` with `maxAmountRequired: "0"` and a recipient derived from the endpoint URL, tool ID, and operator. The client verifies that binding, signs a zero-value `X-Payment`, and the middleware recovers the caller's address via `ecrecover`. Access is then delegated to `IToolRegistry.tryHasAccess`; it works with ERC721OwnerPredicate, ERC1155OwnerPredicate, SubscriptionPredicate, ERC20BalancePredicate, CompositePredicate, or any future predicate automatically.
 
 #### Combined predicate + payment (`paidPredicateGate`)
 
@@ -1038,15 +1043,15 @@ You can also implement a custom `GateMiddleware` that performs rate-limit checks
 
 ### Replay protection
 
-The `X-Payment` identity proof is a stateless bearer token: `predicateGate` verifies the EIP-3009 signature and fields but does **not** record which authorizations it has already accepted. The SDK bounds the replay window server-side — an authorization must not be expired and must be at most 1 hour in the future — but a captured header remains replayable until its `validBefore`. On the paid path this is limited further because the facilitator settling the onchain `TransferWithAuthorization` consumes the nonce, so a real payment can't be double-settled; the residual surface is identity/access on the free gate (the onchain predicate still gates who is allowed).
+`predicateGate` binds each zero-value authorization to the endpoint URL, tool ID, and operator through the signed EIP-3009 `to` field. `eip3009AuthenticatedFetch` verifies that binding before signing. It permits same-origin redirects and rejects cross-origin redirects before creating a signature. This prevents a phishing endpoint from collecting a valid header for another tool, even when both tools name the same operator.
 
-The SDK deliberately does not ship server-side nonce tracking — single-use semantics require a shared, TTL'd store, and mandating one (e.g. Redis) would tie tool creators to a specific data store and break serverless/multi-instance deployments. If your tool needs stronger-than-window replay protection, implement it yourself in a custom `GateMiddleware`: on each request, read the authorization's `nonce` (bytes32), reject (401) if it is already present in your store, otherwise record it with a TTL equal to your `validBefore` window. Use whatever store fits your deployment (Cloudflare Durable Objects / KV, Upstash Redis on Vercel, DynamoDB, etc.).
+The header remains reusable against its intended endpoint until `validBefore` unless the server configures `replayGuard`. The guard atomically reserves the authorization's `(payer, nonce)` key before the handler runs. Its storage must be shared across instances and its TTL must cover the accepted authorization window. The SDK does not provide a default store because deployments use different storage systems. See `skill/references/x402.md` for the interface and a Redis example.
 
 ### Sensitive Data Handling
 
 - **Private keys** are never handled directly by the SDK runtime. They flow through `@opensea/wallet-adapters`, which supports Privy, Turnkey, Fireblocks, and local key signing. The SDK accepts a `WalletAdapter` interface — it never reads or stores raw key material.
 - **Environment variables** — the `deploy` command detects sensitive env vars (names ending in `_KEY`, `_SECRET`, `_TOKEN`, `_PASSWORD`, `_PRIVATE`) and masks their values during interactive prompts.
-- **EIP-3009 auth** — the `predicateGate` middleware verifies EIP-3009 zero-value authorizations via `ecrecover` (no RPC call needed). It rejects a non-zero `value` on the free identity gate, pins the authorization to the gate's configured chain, and caps `validBefore` to at most 1 hour ahead to limit replay. See [Replay protection](#replay-protection) for nonce-dedupe guidance.
+- **EIP-3009 auth:** The `predicateGate` middleware verifies EIP-3009 zero-value authorizations via `ecrecover` (no RPC call needed). It rejects a non-zero `value`, binds the signature to the endpoint URL, tool ID, and operator, pins it to the configured identity chain, and caps `validBefore` to at most 1 hour ahead. Use `replayGuard` for single-use semantics.
 - **x402 payments** — the `paidFetch` client validates payment parameters before signing: `maxAmount` caps the spend, `allowedRecipients` restricts payees, and `allowedAssets` defaults to the canonical USDC contract for the network. These guard against malicious 402 responses.
 
 ## Tips

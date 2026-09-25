@@ -25,6 +25,9 @@ describe("getChain", () => {
     expect(defaultRpcUrl(chain)).toBe("https://rpc.mainnet.chain.robinhood.com")
     expect(chain.blockExplorers?.default.name).toBe("Etherscan")
     expect(chain.blockExplorers?.default.url).toBe("https://robin.etherscan.io")
+    expect(chain.blockExplorers?.default).toMatchObject({
+      apiUrl: "https://api.etherscan.io/v2/api?chainid=4663",
+    })
     expect(chain.contracts?.multicall3?.address).toBe(
       "0xcA11bde05977b3631167028862bE2a173976CA11",
     )

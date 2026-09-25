@@ -164,6 +164,11 @@ export {
   TraitGatedPredicateClient,
 } from "./lib/onchain/predicate-clients.js"
 export { ToolRegistryClient } from "./lib/onchain/registry.js"
+export type { PredicateGateAudienceBinding } from "./lib/predicate-gate-audience.js"
+export {
+  derivePredicateGateRecipient,
+  normalizePredicateGateAudience,
+} from "./lib/predicate-gate-audience.js"
 export type {
   CallerEip3009UsageEvent,
   CallerUsageReporterConfig,

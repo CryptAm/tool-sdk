@@ -88,7 +88,11 @@ export interface PaymentRequirements {
   maxAmountRequired: string
   payTo: string
   asset: string
-  extra?: { name?: string; version?: string }
+  extra?: {
+    name?: string
+    version?: string
+    [key: string]: unknown
+  }
 }
 
 /**
