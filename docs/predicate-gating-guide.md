@@ -245,7 +245,7 @@ Expected response:
 ```
 
 HTTP status: `402`.
-```
+
 
 ## Delegated agent access (delegate.xyz)
 
